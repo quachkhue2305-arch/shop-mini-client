@@ -1,29 +1,45 @@
 import { useRef, useState } from "react";
+import CartDialog from "./components/CartDialog";
 import Header from "./components/Header";
 import ProductList from "./components/ProductList";
 import Footer from "./components/Footer";
-import { products } from "./data/products";
+import { products, type Product } from "./data/products";
+import { addToCart, countItems, removeFromCart, updateQuantity, type CartItem } from "./utils/cart";
+import { filterProducts, getCategories, searchByPriceRange } from "./utils/product";
 import "./App.css";
 
-const categories = ["Tất cả", ...new Set(products.map((product) => product.category))];
-const formatPrice = (price: number) => price.toLocaleString("vi-VN") + " ₫";
+const categories = ["Tất cả", ...getCategories(products)];
+const featuredSections = [
+  { id: "dien-tu", title: "Đồ điện tử", items: filterProducts(products, { category: "Điện tử" }) },
+  { id: "sap-het-hang", title: "Sản phẩm sắp hết hàng", items: products.filter(({ stock }) => stock >= 1 && stock <= 5) },
+];
 
 function App() {
   const [category, setCategory] = useState("Tất cả");
-  const [cart, setCart] = useState<Record<number, number>>({});
+  const [minPrice, setMinPrice] = useState("");
+  const [maxPrice, setMaxPrice] = useState("");
+  const [cart, setCart] = useState<CartItem[]>([]);
   const cartDialog = useRef<HTMLDialogElement>(null);
-  const cartItems = products.filter((product) => cart[product.id] > 0);
-  const count = cartItems.reduce((total, product) => total + cart[product.id], 0);
-  const total = cartItems.reduce((sum, product) => sum + product.price * cart[product.id], 0);
-  const visibleProducts = category === "Tất cả"
-    ? products
-    : products.filter((product) => product.category === category);
+  const quantities = Object.fromEntries(cart.map(({ product, quantity }) => [product.id, quantity]));
+  const count = countItems(cart);
+  const min = minPrice === "" ? 0 : Number(minPrice);
+  const max = maxPrice === "" ? Infinity : Number(maxPrice);
+  const invalidRange = min < 0 || max < 0 || min > max;
+  const categoryProducts = filterProducts(products, { category: category === "Tất cả" ? undefined : category });
+  const visibleProducts = invalidRange ? [] : searchByPriceRange(categoryProducts, min, max);
 
-  function changeQuantity(id: number, amount: number, stock: number) {
-    setCart((current) => ({
-      ...current,
-      [id]: Math.max(0, Math.min(stock, (current[id] ?? 0) + amount)),
-    }));
+  function addProduct(product: Product) {
+    setCart((current) => {
+      const quantity = current.find((item) => item.product.id === product.id)?.quantity ?? 0;
+      return quantity < product.stock ? addToCart(current, product) : current;
+    });
+  }
+
+  function decreaseQuantity(productId: number) {
+    setCart((current) => {
+      const item = current.find(({ product }) => product.id === productId);
+      return item ? updateQuantity(current, productId, item.quantity - 1) : current;
+    });
   }
 
   return (
@@ -32,8 +48,8 @@ function App() {
       <main id="trang-chu" className="container">
         <section className="hero" aria-labelledby="hero-title">
           <div className="hero-copy">
-            <h1 id="hero-title">Đồ dùng hay <span>cho mỗi ngày.</span></h1>
-            <p>Từ áo thun cơ bản đến phụ kiện công nghệ, chọn món đồ hợp với bạn.</p>
+            <h1 id="hero-title">Đồ hay cho <span>mỗi ngày.</span></h1>
+            <p>Tìm đồ đi học, đi làm và dùng hằng ngày, từ áo thun cơ bản đến phụ kiện công nghệ.</p>
             <a className="hero-link" href="#san-pham">Xem sản phẩm <span aria-hidden="true">↓</span></a>
           </div>
           <img
@@ -45,6 +61,12 @@ function App() {
             fetchPriority="high"
           />
         </section>
+        <nav className="collection-links" aria-label="Các khu sản phẩm">
+          <a href="#san-pham">Sản phẩm nổi bật <span aria-hidden="true">↘</span></a>
+          {featuredSections.map(({ id, title }) => (
+            <a key={id} href={`#${id}`}>{title} <span aria-hidden="true">↘</span></a>
+          ))}
+        </nav>
         <section id="san-pham" className="catalog" aria-labelledby="catalog-title">
           <div className="catalog-heading">
             <h2 id="catalog-title">Sản phẩm nổi bật</h2>
@@ -57,33 +79,48 @@ function App() {
               </button>
             ))}
           </div>
-          <ProductList items={visibleProducts} quantities={cart} onAdd={(product) => changeQuantity(product.id, 1, product.stock)} />
+          <fieldset className="price-filter">
+            <legend>Lọc theo giá</legend>
+            <label>
+              Từ (đ)
+              <input type="number" inputMode="numeric" min="0" placeholder="0" value={minPrice}
+                aria-invalid={invalidRange} aria-describedby={invalidRange ? "price-error" : undefined}
+                onChange={(event) => setMinPrice(event.target.value)} />
+            </label>
+            <label>
+              Đến (đ)
+              <input type="number" inputMode="numeric" min="0" placeholder="Không giới hạn" value={maxPrice}
+                aria-invalid={invalidRange} aria-describedby={invalidRange ? "price-error" : undefined}
+                onChange={(event) => setMaxPrice(event.target.value)} />
+            </label>
+            <button type="button" disabled={minPrice === "" && maxPrice === ""} onClick={() => { setMinPrice(""); setMaxPrice(""); }}>
+              Xóa lọc giá
+            </button>
+            {invalidRange && <p id="price-error" role="alert">Nhập giá từ 0 đ trở lên và giá đến ít nhất bằng giá từ.</p>}
+          </fieldset>
+          {visibleProducts.length > 0
+            ? <ProductList items={visibleProducts} quantities={quantities} onAdd={addProduct} />
+            : !invalidRange && <p className="catalog-empty">Không có sản phẩm phù hợp với bộ lọc.</p>}
         </section>
+        {featuredSections.map(({ id, title, items }) => (
+          <section key={id} className="catalog" aria-labelledby={id}>
+            <div className="catalog-heading">
+              <h2 id={id}>{title}</h2>
+              <p>{items.length} sản phẩm</p>
+            </div>
+            <ProductList items={items} quantities={quantities} onAdd={addProduct} />
+          </section>
+        ))}
       </main>
       <Footer />
-      <dialog ref={cartDialog} className="cart-dialog" aria-labelledby="cart-title">
-        <div className="cart-heading">
-          <h2 id="cart-title">Giỏ hàng</h2>
-          <form method="dialog"><button className="close-button" aria-label="Đóng giỏ hàng">×</button></form>
-        </div>
-        {count === 0 ? <p>Giỏ hàng đang trống.</p> : (
-          <>
-            <ul className="cart-items">
-              {cartItems.map((product) => (
-                <li key={product.id}>
-                  <div><strong>{product.name}</strong><p>{formatPrice(product.price)}</p></div>
-                  <div className="quantity">
-                    <button type="button" aria-label={`Giảm số lượng ${product.name}`} onClick={() => changeQuantity(product.id, -1, product.stock)}>−</button>
-                    <span>{cart[product.id]}</span>
-                    <button type="button" aria-label={`Tăng số lượng ${product.name}`} disabled={cart[product.id] >= product.stock} onClick={() => changeQuantity(product.id, 1, product.stock)}>+</button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-            <p className="cart-total">Tổng cộng <strong>{formatPrice(total)}</strong></p>
-          </>
-        )}
-      </dialog>
+      <CartDialog
+        dialogRef={cartDialog}
+        cart={cart}
+        onAdd={addProduct}
+        onDecrease={decreaseQuantity}
+        onRemove={(id) => setCart((current) => removeFromCart(current, id))}
+        onComplete={() => setCart([])}
+      />
     </>
   );
 }
